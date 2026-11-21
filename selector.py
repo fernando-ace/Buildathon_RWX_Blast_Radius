@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import pickle
 import re
 import sys
 from pathlib import Path
@@ -205,6 +206,13 @@ def _is_comment_only_sqlglot_patch(files: list[dict]) -> bool:
 
 def _read_json(path: Path):
     data = path.read_bytes()
+    return orjson.loads(data) if orjson is not None else json.loads(data)
+
+
+def _read_impact_map(path: Path):
+    data = path.read_bytes()
+    if path.suffix == ".pickle":
+        return pickle.loads(data)
     return orjson.loads(data) if orjson is not None else json.loads(data)
 
 
@@ -411,8 +419,8 @@ def main() -> None:
     tests = _read_json(DATA / "tests.json")["tests"]
     durations = {test["number"]: round(test["seconds"] * 1000) for test in tests}
     try:
-        impact = _read_json(MAP_PATH)
-    except (OSError, json.JSONDecodeError) as error:
+        impact = _read_impact_map(MAP_PATH)
+    except (EOFError, OSError, json.JSONDecodeError, pickle.PickleError) as error:
         print(f"could not read impact map: {error}; selecting every test", file=sys.stderr)
         impact = {}
     if impact.get("base_commit") != BASE_COMMIT:
