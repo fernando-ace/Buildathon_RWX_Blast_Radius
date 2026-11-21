@@ -23,6 +23,7 @@ DIFF_PATH_RE = re.compile(r"^diff --git a/(.*?) b/(.*?)$")
 SYMBOL_FALLBACK_MAX_LINE_TESTS = 1
 SYMBOL_FALLBACK_MAX_TESTS = 32
 OPTIMIZER_CONSUMER_MAX_TESTS = 40
+DIRECT_LINE_MAX_TESTS = 24
 PYTHON_COMMENT_DIRECTIVE_RE = re.compile(
     r"^#\s*(?:type:|noqa|pragma:|coverage:|fmt:|isort:|pytest:|encoding[:=])", re.IGNORECASE
 )
@@ -361,6 +362,12 @@ def select_tests(
                 if old_lines:
                     for line in old_lines:
                         line_hits = _line_tests(line_map, path, line)
+                        if len(line_hits) > DIRECT_LINE_MAX_TESTS:
+                            symbol_hits = _ranked_symbol_tests(
+                                symbol_map, path, line, line_map, durations, test_files
+                            )
+                            if symbol_hits:
+                                line_hits.intersection_update(symbol_hits)
                         hunk_tests_for_hunk.update(line_hits)
                         if len(line_hits) < SYMBOL_FALLBACK_MAX_LINE_TESTS:
                             # A thin line witness set may miss other callers
@@ -395,9 +402,7 @@ def select_tests(
                     has_uncovered_hunk = True
                 hunk_tests.update(hunk_tests_for_hunk)
             selected.update(hunk_tests)
-            if path.startswith("sqlglot/optimizer/") and (
-                not hunk_tests or Path(path).name == "eliminate_joins.py"
-            ):
+            if path.startswith("sqlglot/optimizer/"):
                 selected.update(
                     _ranked_path_tests(
                         api_consumers.get("optimizer_pipeline", []),
@@ -435,8 +440,7 @@ def select_tests(
                     selected.update(test_file_map.get(f"tests/dialects/test_{stem}.py", []))
             elif path.startswith("sqlglot/dialects/"):
                 stem = Path(path).stem.lower()
-                if len(hunk_tests) <= 10:
-                    selected.update(dialect_fixture_map.get(stem, []))
+                selected.update(dialect_fixture_map.get(stem, []))
                 if has_uncovered_hunk:
                     selected.update(test_file_map.get(f"tests/dialects/test_{stem}.py", []))
                 if stem == "dialect":
