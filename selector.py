@@ -353,6 +353,22 @@ def select_tests(
                     )
                     for line in range(max(1, anchor - 2), anchor + 3):
                         hunk_tests_for_hunk.update(_line_tests(line_map, path, line))
+                added_points = hunk.get("added_points", [])
+                if (
+                    old_lines
+                    and added_points
+                    and len(hunk_tests_for_hunk) <= SYMBOL_FALLBACK_MAX_LINE_TESTS
+                ):
+                    # A mixed hunk can add a new branch beside changed code;
+                    # weak old-line evidence may not cover tests for that branch.
+                    for anchor in {max(1, line) for line, _ in added_points}:
+                        hunk_tests_for_hunk.update(
+                            _ranked_symbol_tests(
+                                symbol_map, path, anchor, line_map, durations, test_files
+                            )
+                        )
+                        for line in range(max(1, anchor - 2), anchor + 3):
+                            hunk_tests_for_hunk.update(_line_tests(line_map, path, line))
                 if not hunk_tests_for_hunk:
                     has_uncovered_hunk = True
                 hunk_tests.update(hunk_tests_for_hunk)
