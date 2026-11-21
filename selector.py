@@ -27,6 +27,7 @@ OPTIMIZER_CONSUMER_MAX_TESTS = 40
 OPTIMIZER_PIPELINE_MAX_TESTS = 2
 OPTIMIZER_SUBQUERY_MAX_TESTS = 1
 DIALECT_FIXTURE_MAX_TESTS = 1
+DIALECT_MULTI_HUNK_FIXTURE_MAX_TESTS = 5
 PARSER_DIALECT_FIXTURE_MAX_TESTS = 5
 DIRECT_LINE_RANK_THRESHOLD = 24
 PYTHON_COMMENT_DIRECTIVE_RE = re.compile(
@@ -378,6 +379,12 @@ def select_tests(
                     selected.update(suites.get("sqlglotc", []))
                 continue
 
+            path_hunk_count = sum(
+                len(entry.get("hunks", []))
+                for entry in files
+                if _normalize_patch_path(entry.get("new_path") or entry.get("old_path", "")) == path
+            )
+
             # File-level execution captures imports and module initialization.
             file_hits = _path_tests(file_map, path)
             if path.startswith("sqlglot/optimizer/"):
@@ -537,13 +544,18 @@ def select_tests(
                     )
             elif path.startswith("sqlglot/dialects/"):
                 stem = Path(path).stem.lower()
+                dialect_fallback_limit = (
+                    DIALECT_FIXTURE_MAX_TESTS
+                    if path_hunk_count == 1
+                    else DIALECT_MULTI_HUNK_FIXTURE_MAX_TESTS
+                )
                 selected.update(
                     _ranked_path_tests(
                         dialect_fixture_map.get(stem, []),
                         path,
                         line_map,
                         durations,
-                        DIALECT_FIXTURE_MAX_TESTS,
+                        dialect_fallback_limit,
                         test_files,
                     )
                 )
