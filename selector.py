@@ -323,6 +323,8 @@ def select_tests(
     dialect_fixture_map = impact.get("dialect_fixture_tests", {})
     suites = impact.get("suite_tests", {})
     api_consumers = impact.get("api_consumer_tests", {})
+    comment_lines = impact.get("python_comment_lines", {})
+    string_ranges = impact.get("python_string_ranges", {})
     all_tests = {test["number"] for test in tests}
     if durations is None:
         durations = {test["number"]: round(test["seconds"] * 1000) for test in tests}
@@ -331,12 +333,14 @@ def select_tests(
 
     if _is_comment_only_sqlglot_patch(
         files,
-        impact.get("python_comment_lines", {}),
-        impact.get("python_string_ranges", {}),
+        comment_lines,
+        string_ranges,
     ):
         return set()
 
     for changed in files:
+        if _is_comment_only_sqlglot_patch([changed], comment_lines, string_ranges):
+            continue
         old_path = _normalize_patch_path(changed.get("old_path", ""))
         new_path = _normalize_patch_path(changed.get("new_path", ""))
         relevant_paths = {path for path in (old_path, new_path) if path and path != "/dev/null"}
@@ -477,7 +481,7 @@ def select_tests(
                     has_uncovered_hunk = True
                 hunk_tests.update(hunk_tests_for_hunk)
             selected.update(hunk_tests)
-            if path.startswith("sqlglot/optimizer/"):
+            if path.startswith(("sqlglot/optimizer/", "sqlglot/typing/", "sqlglot/expressions/")):
                 selected.update(
                     _ranked_optimizer_pipeline_tests(
                         api_consumers.get("optimizer_pipeline", []),
