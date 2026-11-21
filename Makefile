@@ -11,7 +11,7 @@ RUN_FLAGS := --rm --platform linux/amd64 --network none --cpus 2 \
 	--volume $(SAMPLE)/commits:/data/commits:ro \
 	--volume $(SAMPLE)/tests.json:/data/tests.json:ro
 
-.PHONY: build sample check
+.PHONY: build sample sample-local check
 
 build:
 	docker build --platform linux/amd64 --tag $(IMAGE) .
@@ -20,6 +20,11 @@ build:
 # scores what it printed.
 sample: build
 	docker run $(RUN_FLAGS) $(IMAGE) > $(OUTPUT)
+	python3 score.py $(SAMPLE) $(SAMPLE)/answers.json $(OUTPUT)
+
+# Scores the selector directly on the host when Docker Desktop is unavailable.
+sample-local:
+	BLAST_RADIUS_DATA=$(SAMPLE) BLAST_RADIUS_MAP=$(CURDIR)/impact_map.json python3 selector.py > $(OUTPUT)
 	python3 score.py $(SAMPLE) $(SAMPLE)/answers.json $(OUTPUT)
 
 # The output's rules only: every line well formed and every commit answered.

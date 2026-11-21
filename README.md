@@ -1,6 +1,6 @@
-# Blast Radius starter
+# TraceMap — Blast Radius
 
-A working submission for the Blast Radius track. It runs every test on every commit, so it never misses a failure and scores badly. Your job is to run less without missing.
+A test impact selector for the RWX Blast Radius track. TraceMap uses per-test source coverage collected from the pinned `sqlglot` baseline, test-suite dependency fallbacks, and fixture-name matches to choose a conservative subset for each patch. It then balances that subset over the cheapest number of workers.
 
 ## The problem
 
@@ -25,16 +25,37 @@ Lower is better. [SCORING.md](SCORING.md) has the exact rules; in short:
 
 "Fails" means pytest reports a failure, an error or a timeout for the test, or the test's file cannot be imported. A test with subtests is one test: one failing subtest fails it.
 
+## How the selector works
+
+- `impact_map.json` records test-to-line, test-to-source-file, enclosing-symbol, and direct-import relationships from the pinned `sqlglot` commit. It also includes test-file membership and fixture associations.
+- At runtime, `selector.py` parses each unified diff and selects tests that cover changed lines or symbols. For higher-level behavior that baseline line coverage can miss, optimizer edits also include optimizer and executor suites, while parser and dialect edits include optimizer tests. Changed optimizer fixtures include the optimizer suite.
+- Unrecognized changes under `sqlglot/` or `tests/` fall back to all tests. This protects recall when a patch cannot be associated with the current map.
+- The selected tests are assigned with longest-processing-time-first scheduling. The selector tries one through eight workers and minimizes busiest-worker time plus the two-second cost per worker.
+
+## Rebuild the impact map
+
+The map is generated once from the pinned source checkout, then checked in as a plain file. It is never generated while the selector runs.
+
+```sh
+git clone https://github.com/tobymao/sqlglot.git sqlglot
+git -C sqlglot checkout --detach eb11aec4be8cb2122afe713a4816662c3f0fb2fa
+python -m pip install -r requirements.lock coverage==7.10.6
+python tools/build_impact_map.py sqlglot --tests sample/tests.json --output impact_map.json
+```
+
+Run this with the pinned SQLGlot checkout and a test environment matching the track's Python and dependencies. The runtime image copies the generated map; it does not need coverage.py.
+
 ## Try it
 
 You need Docker, make and Python 3.9 or newer. The kit unpacks into the folder you are in, so unpack it into an empty one.
 
 ```sh
 make sample   # build, run once on the 30 sample commits under the scorer's limits, and score
+make sample-local # run the selector directly on the host when Docker is unavailable
 make check    # the output's format only
 ```
 
-`make sample` prints your simulated seconds and misses, which are exact for that output. The board adds the CPU seconds your container used and takes the middle of 3 runs, so expect it a little higher. Your program never sees `sample/answers.json`: only the patches and `tests.json` are mounted.
+`make sample` prints your simulated seconds and misses, which are exact for that output. The board adds the CPU seconds your container used and takes the middle of 3 runs, so expect it a little higher. Your program never sees `sample/answers.json`: only the patches and `tests.json` are mounted. `make sample-local` is useful for iteration but does not validate container restrictions or measure scorer CPU time.
 
 `sample/answers.json` lists the tests each sample commit breaks and the kind of change it is. The practice and final commits are hidden, and so is everything your program prints when it runs on them. A rejected submission tells you which rule it broke and nothing more, so reproduce problems here.
 
