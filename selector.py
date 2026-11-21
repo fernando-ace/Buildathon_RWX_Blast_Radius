@@ -23,7 +23,7 @@ DIFF_PATH_RE = re.compile(r"^diff --git a/(.*?) b/(.*?)$")
 SYMBOL_FALLBACK_MAX_LINE_TESTS = 1
 SYMBOL_FALLBACK_MAX_TESTS = 32
 OPTIMIZER_CONSUMER_MAX_TESTS = 40
-DIRECT_LINE_MAX_TESTS = 24
+DIRECT_LINE_RANK_THRESHOLD = 24
 PYTHON_COMMENT_DIRECTIVE_RE = re.compile(
     r"^#\s*(?:type:|noqa|pragma:|coverage:|fmt:|isort:|pytest:|encoding[:=])", re.IGNORECASE
 )
@@ -362,7 +362,7 @@ def select_tests(
                 if old_lines:
                     for line in old_lines:
                         line_hits = _line_tests(line_map, path, line)
-                        if len(line_hits) > DIRECT_LINE_MAX_TESTS:
+                        if len(line_hits) > DIRECT_LINE_RANK_THRESHOLD:
                             symbol_hits = _ranked_symbol_tests(
                                 symbol_map, path, line, line_map, durations, test_files
                             )
