@@ -138,6 +138,10 @@ def select_tests(files: list[dict], tests: list[dict], impact: dict) -> set[int]
             # File-level execution captures imports and module initialization.
             file_hits = _path_tests(file_map, path)
             if path.startswith("sqlglot/optimizer/"):
+                # Optimizer changes can alter output several calls away from
+                # the changed helper; keep the focused optimizer suite as a
+                # bounded recall backstop for those indirect dependencies.
+                selected.update(suites.get("optimizer", []))
                 selected.update(api_consumers.get("optimizer_pipeline", []))
                 if Path(path).name == "eliminate_joins.py":
                     selected.update(api_consumers.get("optimizer_joins", []))
@@ -169,8 +173,13 @@ def select_tests(files: list[dict], tests: list[dict], impact: dict) -> set[int]
                 selected.update(_path_tests(import_map, path))
             if path.startswith("sqlglot/parsers/"):
                 selected.update(dialect_fixture_map.get(Path(path).stem.lower(), []))
-            elif path.startswith("sqlglot/dialects/") and len(hunk_tests) <= 10:
-                selected.update(dialect_fixture_map.get(Path(path).stem.lower(), []))
+            elif path.startswith("sqlglot/dialects/"):
+                stem = Path(path).stem.lower()
+                if len(hunk_tests) <= 10:
+                    selected.update(dialect_fixture_map.get(stem, []))
+                selected.update(test_file_map.get(f"tests/dialects/test_{stem}.py", []))
+                if stem == "dialect":
+                    selected.update(suites.get("dialect", []))
             # Broad file coverage is useful for import-time changes, but a
             # module imported by most of the suite should not drown out a
             # precise function-level witness. Keep it when the candidate set
