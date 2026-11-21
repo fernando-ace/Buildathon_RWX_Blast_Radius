@@ -436,8 +436,7 @@ def select_tests(
             if path.startswith("sqlglot/parsers/"):
                 stem = Path(path).stem.lower()
                 selected.update(dialect_fixture_map.get(stem, []))
-                if has_uncovered_hunk:
-                    selected.update(test_file_map.get(f"tests/dialects/test_{stem}.py", []))
+                selected.update(test_file_map.get(f"tests/dialects/test_{stem}.py", []))
             elif path.startswith("sqlglot/dialects/"):
                 stem = Path(path).stem.lower()
                 selected.update(dialect_fixture_map.get(stem, []))
