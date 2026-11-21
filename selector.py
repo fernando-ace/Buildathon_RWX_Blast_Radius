@@ -26,6 +26,7 @@ SYMBOL_FALLBACK_MAX_TESTS = 2
 OPTIMIZER_CONSUMER_MAX_TESTS = 40
 OPTIMIZER_PIPELINE_MAX_TESTS = 2
 OPTIMIZER_SUBQUERY_MAX_TESTS = 1
+DIALECT_FIXTURE_MAX_TESTS = 1
 DIRECT_LINE_RANK_THRESHOLD = 24
 PYTHON_COMMENT_DIRECTIVE_RE = re.compile(
     r"^#\s*(?:!|type:|mypy:|pyright:|pyre:|noqa|pragma:|coverage:|fmt:|isort:|"
@@ -518,10 +519,18 @@ def select_tests(
                 selected.update(test_file_map.get(f"tests/dialects/test_{stem}.py", []))
             elif path.startswith("sqlglot/dialects/"):
                 stem = Path(path).stem.lower()
-                selected.update(dialect_fixture_map.get(stem, []))
+                selected.update(
+                    _ranked_path_tests(
+                        dialect_fixture_map.get(stem, []),
+                        path,
+                        line_map,
+                        durations,
+                        DIALECT_FIXTURE_MAX_TESTS,
+                        test_files,
+                    )
+                )
                 if has_uncovered_hunk:
                     selected.update(test_file_map.get(f"tests/dialects/test_{stem}.py", []))
-                if stem == "dialect":
                     selected.update(suites.get("dialect", []))
             # Broad file coverage is useful for import-time changes, but a
             # module imported by most of the suite should not drown out a
