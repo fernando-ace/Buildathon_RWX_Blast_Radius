@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import marshal
 import os
 import re
 import sys
@@ -297,6 +298,8 @@ def _read_json(path: Path):
 
 def _read_impact_map(path: Path):
     data = path.read_bytes()
+    if path.suffix == ".marshal":
+        return marshal.loads(data)
     return orjson.loads(data) if orjson is not None else json.loads(data)
 
 
