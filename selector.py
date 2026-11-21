@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import pickle
 import re
 import sys
 from pathlib import Path
@@ -21,10 +20,10 @@ BASE_COMMIT = "eb11aec4be8cb2122afe713a4816662c3f0fb2fa"
 HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 DIFF_PATH_RE = re.compile(r"^diff --git a/(.*?) b/(.*?)$")
 SYMBOL_FALLBACK_MAX_LINE_TESTS = 1
-SYMBOL_FALLBACK_MAX_TESTS = 40
+SYMBOL_FALLBACK_MAX_TESTS = 2
 OPTIMIZER_CONSUMER_MAX_TESTS = 40
-OPTIMIZER_PIPELINE_MAX_TESTS = 24
-OPTIMIZER_SUBQUERY_MAX_TESTS = 24
+OPTIMIZER_PIPELINE_MAX_TESTS = 2
+OPTIMIZER_SUBQUERY_MAX_TESTS = 1
 DIRECT_LINE_RANK_THRESHOLD = 24
 PYTHON_COMMENT_DIRECTIVE_RE = re.compile(
     r"^#\s*(?:!|type:|mypy:|pyright:|pyre:|noqa|pragma:|coverage:|fmt:|isort:|"
@@ -298,8 +297,6 @@ def _read_json(path: Path):
 
 def _read_impact_map(path: Path):
     data = path.read_bytes()
-    if path.suffix == ".pickle":
-        return pickle.loads(data)
     return orjson.loads(data) if orjson is not None else json.loads(data)
 
 
