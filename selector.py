@@ -19,7 +19,7 @@ MAP_PATH = Path(os.environ.get("BLAST_RADIUS_MAP", Path(__file__).with_name("imp
 BASE_COMMIT = "eb11aec4be8cb2122afe713a4816662c3f0fb2fa"
 HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 DIFF_PATH_RE = re.compile(r"^diff --git a/(.*?) b/(.*?)$")
-SYMBOL_FALLBACK_MAX_LINE_TESTS = 5
+SYMBOL_FALLBACK_MAX_LINE_TESTS = 7
 
 
 def parse_patch(text: str) -> list[dict]:
