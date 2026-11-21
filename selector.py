@@ -21,6 +21,7 @@ HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 DIFF_PATH_RE = re.compile(r"^diff --git a/(.*?) b/(.*?)$")
 SYMBOL_FALLBACK_MAX_LINE_TESTS = 1
 SYMBOL_FALLBACK_MAX_TESTS = 16
+OPTIMIZER_CONSUMER_MAX_TESTS = 32
 PYTHON_COMMENT_DIRECTIVE_RE = re.compile(
     r"^#\s*(?:type:|noqa|pragma:|coverage:|fmt:|isort:|pytest:|encoding[:=])", re.IGNORECASE
 )
@@ -135,6 +136,32 @@ def _path_tests(path_map: dict, path: str) -> set[int]:
     return set(path_map.get(path, []))
 
 
+def _ranked_path_tests(
+    test_numbers: list[int],
+    path: str,
+    line_map: dict,
+    durations: dict[int, int],
+    limit: int,
+) -> set[int]:
+    candidates = set(test_numbers)
+    if len(candidates) <= limit:
+        return candidates
+
+    line_coverage = {number: 0 for number in candidates}
+    for start, end, tests in line_map.get(path, []):
+        overlap = end - start + 1
+        for number in tests:
+            if number in line_coverage:
+                line_coverage[number] += overlap
+
+    return set(
+        sorted(
+            candidates,
+            key=lambda number: (-line_coverage[number], durations[number], number),
+        )[:limit]
+    )
+
+
 def _normalize_patch_path(path: str) -> str:
     return path.replace("\\", "/").removeprefix("./")
 
@@ -241,14 +268,46 @@ def select_tests(files: list[dict], tests: list[dict], impact: dict) -> set[int]
             # File-level execution captures imports and module initialization.
             file_hits = _path_tests(file_map, path)
             if path.startswith("sqlglot/optimizer/"):
-                selected.update(api_consumers.get("optimizer_pipeline", []))
+                selected.update(
+                    _ranked_path_tests(
+                        api_consumers.get("optimizer_pipeline", []),
+                        path,
+                        line_map,
+                        durations,
+                        OPTIMIZER_CONSUMER_MAX_TESTS,
+                    )
+                )
                 if Path(path).name == "eliminate_joins.py":
-                    selected.update(api_consumers.get("optimizer_joins", []))
-                    selected.update(api_consumers.get("executor_large_datasets", []))
+                    selected.update(
+                        _ranked_path_tests(
+                            api_consumers.get("optimizer_joins", []),
+                            path,
+                            line_map,
+                            durations,
+                            OPTIMIZER_CONSUMER_MAX_TESTS,
+                        )
+                    )
+                    selected.update(
+                        _ranked_path_tests(
+                            api_consumers.get("executor_large_datasets", []),
+                            path,
+                            line_map,
+                            durations,
+                            OPTIMIZER_CONSUMER_MAX_TESTS,
+                        )
+                    )
                     selected.update(fixture_map.get("tests/fixtures/optimizer/tpc-ds/tpc-ds.sql", []))
                     selected.update(fixture_map.get("tests/fixtures/optimizer/tpc-h/tpc-h.sql", []))
                 elif "subquer" in Path(path).name.lower():
-                    selected.update(api_consumers.get("optimizer_subqueries", []))
+                    selected.update(
+                        _ranked_path_tests(
+                            api_consumers.get("optimizer_subqueries", []),
+                            path,
+                            line_map,
+                            durations,
+                            OPTIMIZER_CONSUMER_MAX_TESTS,
+                        )
+                    )
             if path.startswith(("sqlglot/typing/", "sqlglot/expressions/")):
                 selected.update(suites.get("typing", []))
             if not file_hits and path.startswith("sqlglot/"):
