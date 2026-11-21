@@ -19,7 +19,7 @@ MAP_PATH = Path(os.environ.get("BLAST_RADIUS_MAP", Path(__file__).with_name("imp
 BASE_COMMIT = "eb11aec4be8cb2122afe713a4816662c3f0fb2fa"
 HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 DIFF_PATH_RE = re.compile(r"^diff --git a/(.*?) b/(.*?)$")
-SYMBOL_FALLBACK_MAX_LINE_TESTS = 7
+SYMBOL_FALLBACK_MAX_LINE_TESTS = 1
 
 
 def parse_patch(text: str) -> list[dict]:
@@ -234,7 +234,7 @@ def select_tests(files: list[dict], tests: list[dict], impact: dict) -> set[int]
             # module imported by most of the suite should not drown out a
             # precise function-level witness. Keep it when the candidate set
             # is bounded or when it is close in size to the hunk witnesses.
-            if len(file_hits) <= 200 and (
+            if len(file_hits) <= 40 and (
                 not hunk_tests or len(file_hits) <= max(8, 2 * len(hunk_tests))
             ):
                 selected.update(file_hits)
