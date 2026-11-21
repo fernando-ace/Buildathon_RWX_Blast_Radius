@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import marshal
 import os
 import re
@@ -12,6 +11,8 @@ from pathlib import Path
 try:
     import orjson
 except ImportError:
+    import json
+
     orjson = None
 
 
@@ -558,7 +559,7 @@ def main() -> None:
     test_files = {test["number"]: test["file"] for test in tests}
     try:
         impact = _read_impact_map(MAP_PATH)
-    except (EOFError, OSError, json.JSONDecodeError, pickle.PickleError) as error:
+    except (EOFError, OSError, ValueError) as error:
         print(f"could not read impact map: {error}; selecting every test", file=sys.stderr)
         impact = {}
     if impact.get("base_commit") != BASE_COMMIT:
