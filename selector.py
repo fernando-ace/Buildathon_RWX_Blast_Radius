@@ -27,6 +27,7 @@ OPTIMIZER_CONSUMER_MAX_TESTS = 40
 OPTIMIZER_PIPELINE_MAX_TESTS = 2
 OPTIMIZER_SUBQUERY_MAX_TESTS = 1
 DIALECT_FIXTURE_MAX_TESTS = 1
+PARSER_DIALECT_FIXTURE_MAX_TESTS = 5
 DIRECT_LINE_RANK_THRESHOLD = 24
 PYTHON_COMMENT_DIRECTIVE_RE = re.compile(
     r"^#\s*(?:!|type:|mypy:|pyright:|pyre:|noqa|pragma:|coverage:|fmt:|isort:|"
@@ -482,7 +483,12 @@ def select_tests(
                     has_uncovered_hunk = True
                 hunk_tests.update(hunk_tests_for_hunk)
             selected.update(hunk_tests)
-            if path.startswith(("sqlglot/optimizer/", "sqlglot/typing/", "sqlglot/expressions/")):
+            if path.startswith((
+                "sqlglot/optimizer/",
+                "sqlglot/typing/",
+                "sqlglot/expressions/",
+                "sqlglot/parsers/",
+            )):
                 selected.update(
                     _ranked_optimizer_pipeline_tests(
                         api_consumers.get("optimizer_pipeline", []),
@@ -515,8 +521,20 @@ def select_tests(
                     selected.update(_path_tests(import_map, path))
             if path.startswith("sqlglot/parsers/"):
                 stem = Path(path).stem.lower()
-                selected.update(dialect_fixture_map.get(stem, []))
-                selected.update(test_file_map.get(f"tests/dialects/test_{stem}.py", []))
+                if has_uncovered_hunk:
+                    selected.update(dialect_fixture_map.get(stem, []))
+                    selected.update(test_file_map.get(f"tests/dialects/test_{stem}.py", []))
+                else:
+                    selected.update(
+                        _ranked_path_tests(
+                            dialect_fixture_map.get(stem, []),
+                            path,
+                            line_map,
+                            durations,
+                            PARSER_DIALECT_FIXTURE_MAX_TESTS,
+                            test_files,
+                        )
+                    )
             elif path.startswith("sqlglot/dialects/"):
                 stem = Path(path).stem.lower()
                 selected.update(
