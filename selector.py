@@ -140,8 +140,7 @@ def select_tests(files: list[dict], tests: list[dict], impact: dict) -> set[int]
                     runtime_fixture_map if runtime_fixture_map is not None else fixture_map,
                     fixture_key,
                 )
-                if not fixture_tests:
-                    fixture_tests = _path_tests(fixture_map, fixture_key)
+                fixture_tests.update(_path_tests(fixture_map, fixture_key))
                 if fixture_tests:
                     selected.update(fixture_tests)
                 else:
