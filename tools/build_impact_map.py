@@ -16,6 +16,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import tokenize
 from collections import defaultdict
 from pathlib import Path
 
@@ -264,6 +265,43 @@ def function_ranges(repo: Path) -> dict[str, list[list[int]]]:
     return output
 
 
+def python_source_line_kinds(
+    repo: Path,
+) -> tuple[dict[str, list[int]], dict[str, list[list[int]]]]:
+    """Map actual comment lines and multiline string ranges in Python sources."""
+    comment_lines: dict[str, list[int]] = {}
+    string_ranges: dict[str, list[list[int]]] = {}
+    for source in (repo / "sqlglot").rglob("*.py"):
+        relative = source.relative_to(repo).as_posix()
+        try:
+            with tokenize.open(source) as stream:
+                tokens = list(tokenize.generate_tokens(stream.readline))
+        except (OSError, SyntaxError, UnicodeError, tokenize.TokenError, IndentationError):
+            continue
+
+        comments = sorted(
+            {token.start[0] for token in tokens if token.type == tokenize.COMMENT}
+        )
+        if comments:
+            comment_lines[relative] = comments
+
+        ranges: list[list[int]] = []
+        for token in tokens:
+            token_name = tokenize.tok_name.get(token.type, "")
+            if not (
+                token.type == tokenize.STRING or token_name.startswith("FSTRING_")
+            ) or token.end[0] <= token.start[0]:
+                continue
+            if ranges and token.start[0] <= ranges[-1][1]:
+                ranges[-1][1] = max(ranges[-1][1], token.end[0])
+            else:
+                ranges.append([token.start[0], token.end[0]])
+        if ranges:
+            string_ranges[relative] = ranges
+
+    return comment_lines, string_ranges
+
+
 def build(repo: Path, tests_path: Path, output_path: Path) -> None:
     tests = json.loads(tests_path.read_text(encoding="utf-8"))["tests"]
     number_by_node = {test["id"]: test["number"] for test in tests}
@@ -342,6 +380,7 @@ def build(repo: Path, tests_path: Path, output_path: Path) -> None:
     runtime_fixture_tests = {
         path: sorted(numbers) for path, numbers in sorted(fixture_reads.items())
     }
+    python_comment_lines, python_string_ranges = python_source_line_kinds(repo)
     result = {
         "version": 1,
         "base_commit": PINNED_COMMIT,
@@ -365,6 +404,8 @@ def build(repo: Path, tests_path: Path, output_path: Path) -> None:
         "runtime_fixture_tests": runtime_fixture_tests,
         "dialect_fixture_tests": dialect_fixture_map(repo, runtime_fixture_tests),
         "api_consumer_tests": api_consumer_map(repo, tests),
+        "python_comment_lines": python_comment_lines,
+        "python_string_ranges": python_string_ranges,
     }
     output_path.parent.mkdir(parents=True, exist_ok=True)
     encoded = json.dumps(result, separators=(",", ":"))

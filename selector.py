@@ -24,6 +24,11 @@ SYMBOL_FALLBACK_MAX_LINE_TESTS = 1
 SYMBOL_FALLBACK_MAX_TESTS = 48
 OPTIMIZER_CONSUMER_MAX_TESTS = 40
 DIRECT_LINE_RANK_THRESHOLD = 24
+PYTHON_COMMENT_DIRECTIVE_RE = re.compile(
+    r"^#\s*(?:!|type:|mypy:|pyright:|pyre:|noqa|pragma:|coverage:|fmt:|isort:|"
+    r"pytest:|flake8:|ruff:|pylint:|cython:|distutils:|coding[:=]|encoding[:=])",
+    re.IGNORECASE,
+)
 
 
 def parse_patch(text: str) -> list[dict]:
@@ -195,6 +200,63 @@ def _normalize_patch_path(path: str) -> str:
     return path.replace("\\", "/").removeprefix("./")
 
 
+def _is_comment_only_sqlglot_patch(
+    files: list[dict], comment_lines: dict, string_ranges: dict
+) -> bool:
+    """Skip only patches whose changed lines are known Python comments."""
+    if not files:
+        return False
+
+    changed_any = False
+    for file in files:
+        old_path = _normalize_patch_path(file.get("old_path", ""))
+        new_path = _normalize_patch_path(file.get("new_path", ""))
+        if (
+            not old_path.startswith("sqlglot/")
+            or not old_path.endswith(".py")
+            or new_path != old_path
+        ):
+            return False
+
+        comments = set(comment_lines.get(old_path, []))
+        strings = string_ranges.get(old_path, [])
+        for hunk in file.get("hunks", []):
+            old_text = hunk.get("old_text", [])
+            old_numbers = hunk.get("old_lines", [])
+            new_text = hunk.get("new_text", [])
+            added_points = hunk.get("added_points", [])
+            if len(old_text) != len(old_numbers) or len(new_text) != len(added_points):
+                return False
+
+            for line_text, line_number in zip(old_text, old_numbers):
+                stripped = line_text.strip()
+                if not stripped:
+                    continue
+                changed_any = True
+                if (
+                    not stripped.startswith("#")
+                    or PYTHON_COMMENT_DIRECTIVE_RE.match(stripped)
+                    or line_number <= 2
+                    or line_number not in comments
+                ):
+                    return False
+
+            for line_text, (anchor, _) in zip(new_text, added_points):
+                stripped = line_text.strip()
+                if not stripped:
+                    continue
+                changed_any = True
+                if (
+                    not stripped.startswith("#")
+                    or PYTHON_COMMENT_DIRECTIVE_RE.match(stripped)
+                    or anchor <= 2
+                    or any(start <= anchor <= end for start, end in strings)
+                ):
+                    return False
+
+    return changed_any
+
+
 def _read_json(path: Path):
     data = path.read_bytes()
     return orjson.loads(data) if orjson is not None else json.loads(data)
@@ -231,6 +293,13 @@ def select_tests(
         durations = {test["number"]: round(test["seconds"] * 1000) for test in tests}
     if test_files is None:
         test_files = {test["number"]: test["file"] for test in tests}
+
+    if _is_comment_only_sqlglot_patch(
+        files,
+        impact.get("python_comment_lines", {}),
+        impact.get("python_string_ranges", {}),
+    ):
+        return set()
 
     for changed in files:
         old_path = _normalize_patch_path(changed.get("old_path", ""))
