@@ -315,16 +315,6 @@ def select_tests(
             # File-level execution captures imports and module initialization.
             file_hits = _path_tests(file_map, path)
             if path.startswith("sqlglot/optimizer/"):
-                selected.update(
-                    _ranked_path_tests(
-                        api_consumers.get("optimizer_pipeline", []),
-                        path,
-                        line_map,
-                        durations,
-                        OPTIMIZER_CONSUMER_MAX_TESTS,
-                        test_files,
-                    )
-                )
                 if Path(path).name == "eliminate_joins.py":
                     selected.update(
                         _ranked_path_tests(
@@ -405,6 +395,19 @@ def select_tests(
                     has_uncovered_hunk = True
                 hunk_tests.update(hunk_tests_for_hunk)
             selected.update(hunk_tests)
+            if path.startswith("sqlglot/optimizer/") and (
+                not hunk_tests or Path(path).name == "eliminate_joins.py"
+            ):
+                selected.update(
+                    _ranked_path_tests(
+                        api_consumers.get("optimizer_pipeline", []),
+                        path,
+                        line_map,
+                        durations,
+                        OPTIMIZER_CONSUMER_MAX_TESTS,
+                        test_files,
+                    )
+                )
             if path.startswith("sqlglot/optimizer/") and not hunk_tests:
                 # Use the full optimizer suite only when the baseline has no
                 # line or symbol evidence for the changed code.
