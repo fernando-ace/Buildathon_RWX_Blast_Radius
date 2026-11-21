@@ -19,6 +19,7 @@ MAP_PATH = Path(os.environ.get("BLAST_RADIUS_MAP", Path(__file__).with_name("imp
 BASE_COMMIT = "eb11aec4be8cb2122afe713a4816662c3f0fb2fa"
 HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 DIFF_PATH_RE = re.compile(r"^diff --git a/(.*?) b/(.*?)$")
+SYMBOL_FALLBACK_MAX_LINE_TESTS = 8
 
 
 def parse_patch(text: str) -> list[dict]:
@@ -185,8 +186,12 @@ def select_tests(files: list[dict], tests: list[dict], impact: dict) -> set[int]
                 old_lines = hunk.get("old_lines", [])
                 if old_lines:
                     for line in old_lines:
-                        hunk_tests.update(_line_tests(line_map, path, line))
-                        hunk_tests.update(_tests_in_symbol(symbol_map, path, line))
+                        line_hits = _line_tests(line_map, path, line)
+                        hunk_tests.update(line_hits)
+                        if len(line_hits) < SYMBOL_FALLBACK_MAX_LINE_TESTS:
+                            # A thin line witness set may miss other callers
+                            # exercising branches in the same changed function.
+                            hunk_tests.update(_tests_in_symbol(symbol_map, path, line))
                 else:
                     # Pure additions have no baseline line coverage. Anchor to
                     # the nearest parent lines and the enclosing baseline symbol.
@@ -218,8 +223,7 @@ def select_tests(files: list[dict], tests: list[dict], impact: dict) -> set[int]
             if path.startswith("sqlglot/parsers/"):
                 stem = Path(path).stem.lower()
                 selected.update(dialect_fixture_map.get(stem, []))
-                if len(selected) <= 20:
-                    selected.update(test_file_map.get(f"tests/dialects/test_{stem}.py", []))
+                selected.update(test_file_map.get(f"tests/dialects/test_{stem}.py", []))
             elif path.startswith("sqlglot/dialects/"):
                 stem = Path(path).stem.lower()
                 if len(hunk_tests) <= 10:
