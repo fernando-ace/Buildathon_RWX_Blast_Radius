@@ -20,6 +20,9 @@ BASE_COMMIT = "eb11aec4be8cb2122afe713a4816662c3f0fb2fa"
 HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 DIFF_PATH_RE = re.compile(r"^diff --git a/(.*?) b/(.*?)$")
 SYMBOL_FALLBACK_MAX_LINE_TESTS = 1
+PYTHON_COMMENT_DIRECTIVE_RE = re.compile(
+    r"^#\s*(?:type:|noqa|pragma:|coverage:|fmt:|isort:|pytest:|encoding[:=])", re.IGNORECASE
+)
 
 
 def parse_patch(text: str) -> list[dict]:
@@ -59,10 +62,12 @@ def parse_patch(text: str) -> list[dict]:
             old_line += 1
             new_line += 1
         elif line.startswith("-") and not line.startswith("---"):
+            current["hunks"][-1].setdefault("old_text", []).append(line[1:])
             current["hunks"][-1]["old_lines"] = current["hunks"][-1].get("old_lines", []) + [old_line]
             old_line += 1
         elif line.startswith("+") and not line.startswith("+++"):
             current["hunks"][-1]["added"] = True
+            current["hunks"][-1].setdefault("new_text", []).append(line[1:])
             indent = len(line[1:]) - len(line[1:].lstrip(" \t"))
             current["hunks"][-1]["added_indent"] = max(
                 current["hunks"][-1].get("added_indent", 0), indent
@@ -109,12 +114,54 @@ def _normalize_patch_path(path: str) -> str:
     return path.replace("\\", "/").removeprefix("./")
 
 
+def _has_executable_change(hunks: list[dict]) -> bool:
+    """Treat ordinary Python comments as non-runtime changes, conservatively."""
+    changed_lines = [
+        line
+        for hunk in hunks
+        for line in hunk.get("old_text", []) + hunk.get("new_text", [])
+    ]
+    if not changed_lines:
+        return True
+
+    for line in changed_lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("#") and not PYTHON_COMMENT_DIRECTIVE_RE.match(stripped):
+            continue
+        return True
+    return False
+
+
+def _is_comment_only_sqlglot_patch(files: list[dict]) -> bool:
+    if not files:
+        return False
+    for file in files:
+        paths = {
+            _normalize_patch_path(file.get("old_path", "")),
+            _normalize_patch_path(file.get("new_path", "")),
+        } - {"", "/dev/null"}
+        if not paths or not all(
+            path.startswith("sqlglot/") and path.endswith(".py") for path in paths
+        ):
+            return False
+        if _has_executable_change(file.get("hunks", [])):
+            return False
+    return True
+
+
 def _read_json(path: Path):
     data = path.read_bytes()
     return orjson.loads(data) if orjson is not None else json.loads(data)
 
 
 def select_tests(files: list[dict], tests: list[dict], impact: dict) -> set[int]:
+    # A patch made entirely of ordinary comments in sqlglot source cannot
+    # change runtime behavior, so it needs no test workers.
+    if _is_comment_only_sqlglot_patch(files):
+        return set()
+
     selected: set[int] = set()
     line_map = impact.get("line_tests", {})
     symbol_map = impact.get("symbol_tests", {})
@@ -181,23 +228,28 @@ def select_tests(files: list[dict], tests: list[dict], impact: dict) -> set[int]
             if not file_hits and path.startswith("sqlglot/"):
                 selected.update(all_tests)
             hunk_tests: set[int] = set()
+            has_uncovered_hunk = False
             for hunk in changed.get("hunks", []):
+                hunk_tests_for_hunk: set[int] = set()
                 old_lines = hunk.get("old_lines", [])
                 if old_lines:
                     for line in old_lines:
                         line_hits = _line_tests(line_map, path, line)
-                        hunk_tests.update(line_hits)
+                        hunk_tests_for_hunk.update(line_hits)
                         if len(line_hits) < SYMBOL_FALLBACK_MAX_LINE_TESTS:
                             # A thin line witness set may miss other callers
                             # exercising branches in the same changed function.
-                            hunk_tests.update(_tests_in_symbol(symbol_map, path, line))
+                            hunk_tests_for_hunk.update(_tests_in_symbol(symbol_map, path, line))
                 else:
                     # Pure additions have no baseline line coverage. Anchor to
                     # the nearest parent lines and the enclosing baseline symbol.
                     anchor = max(1, hunk["old_start"])
-                    hunk_tests.update(_tests_in_symbol(symbol_map, path, anchor))
+                    hunk_tests_for_hunk.update(_tests_in_symbol(symbol_map, path, anchor))
                     for line in range(max(1, anchor - 2), anchor + 3):
-                        hunk_tests.update(_line_tests(line_map, path, line))
+                        hunk_tests_for_hunk.update(_line_tests(line_map, path, line))
+                if not hunk_tests_for_hunk:
+                    has_uncovered_hunk = True
+                hunk_tests.update(hunk_tests_for_hunk)
             selected.update(hunk_tests)
             if path.startswith("sqlglot/optimizer/") and not hunk_tests:
                 # Use the full optimizer suite only when the baseline has no
@@ -222,12 +274,14 @@ def select_tests(files: list[dict], tests: list[dict], impact: dict) -> set[int]
             if path.startswith("sqlglot/parsers/"):
                 stem = Path(path).stem.lower()
                 selected.update(dialect_fixture_map.get(stem, []))
-                selected.update(test_file_map.get(f"tests/dialects/test_{stem}.py", []))
+                if has_uncovered_hunk:
+                    selected.update(test_file_map.get(f"tests/dialects/test_{stem}.py", []))
             elif path.startswith("sqlglot/dialects/"):
                 stem = Path(path).stem.lower()
                 if len(hunk_tests) <= 10:
                     selected.update(dialect_fixture_map.get(stem, []))
-                selected.update(test_file_map.get(f"tests/dialects/test_{stem}.py", []))
+                if has_uncovered_hunk:
+                    selected.update(test_file_map.get(f"tests/dialects/test_{stem}.py", []))
                 if stem == "dialect":
                     selected.update(suites.get("dialect", []))
             # Broad file coverage is useful for import-time changes, but a
