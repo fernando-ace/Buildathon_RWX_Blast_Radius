@@ -89,12 +89,45 @@ def _line_tests(line_map: dict, path: str, line: int) -> set[int]:
     return result
 
 
+def _ranked_candidates(
+    candidates: set[int],
+    line_coverage: dict[int, int],
+    durations: dict[int, int],
+    test_files: dict[int, str],
+    limit: int,
+) -> set[int]:
+    if len(candidates) <= limit:
+        return candidates
+
+    ordered = sorted(
+        candidates,
+        key=lambda number: (-line_coverage[number], durations[number], number),
+    )
+    selected: list[int] = []
+    seen_files: set[str] = set()
+    for number in ordered:
+        test_file = test_files[number]
+        if test_file not in seen_files:
+            selected.append(number)
+            seen_files.add(test_file)
+            if len(selected) == limit:
+                return set(selected)
+
+    for number in ordered:
+        if number not in selected:
+            selected.append(number)
+            if len(selected) == limit:
+                break
+    return set(selected)
+
+
 def _ranked_symbol_tests(
     symbols: dict,
     path: str,
     line: int,
     line_map: dict,
     durations: dict[int, int],
+    test_files: dict[int, str],
 ) -> set[int]:
     matches = [
         (end - start, start, end, tests)
@@ -117,11 +150,12 @@ def _ranked_symbol_tests(
                 if number in line_coverage:
                     line_coverage[number] += overlap
 
-    return set(
-        sorted(
-            candidates,
-            key=lambda number: (-line_coverage[number], durations[number], number),
-        )[:SYMBOL_FALLBACK_MAX_TESTS]
+    return _ranked_candidates(
+        candidates,
+        line_coverage,
+        durations,
+        test_files,
+        SYMBOL_FALLBACK_MAX_TESTS,
     )
 
 
@@ -143,6 +177,7 @@ def _ranked_path_tests(
     line_map: dict,
     durations: dict[int, int],
     limit: int,
+    test_files: dict[int, str],
 ) -> set[int]:
     candidates = set(test_numbers)
     if len(candidates) <= limit:
@@ -155,12 +190,7 @@ def _ranked_path_tests(
             if number in line_coverage:
                 line_coverage[number] += overlap
 
-    return set(
-        sorted(
-            candidates,
-            key=lambda number: (-line_coverage[number], durations[number], number),
-        )[:limit]
-    )
+    return _ranked_candidates(candidates, line_coverage, durations, test_files, limit)
 
 
 def _normalize_patch_path(path: str) -> str:
@@ -221,6 +251,7 @@ def select_tests(
     tests: list[dict],
     impact: dict,
     durations: dict[int, int] | None = None,
+    test_files: dict[int, str] | None = None,
 ) -> set[int]:
     # A patch made entirely of ordinary comments in sqlglot source cannot
     # change runtime behavior, so it needs no test workers.
@@ -242,6 +273,8 @@ def select_tests(
     all_tests = {test["number"] for test in tests}
     if durations is None:
         durations = {test["number"]: round(test["seconds"] * 1000) for test in tests}
+    if test_files is None:
+        test_files = {test["number"]: test["file"] for test in tests}
 
     for changed in files:
         old_path = _normalize_patch_path(changed.get("old_path", ""))
@@ -289,6 +322,7 @@ def select_tests(
                         line_map,
                         durations,
                         OPTIMIZER_CONSUMER_MAX_TESTS,
+                        test_files,
                     )
                 )
                 if Path(path).name == "eliminate_joins.py":
@@ -299,6 +333,7 @@ def select_tests(
                             line_map,
                             durations,
                             OPTIMIZER_CONSUMER_MAX_TESTS,
+                            test_files,
                         )
                     )
                     selected.update(
@@ -308,6 +343,7 @@ def select_tests(
                             line_map,
                             durations,
                             OPTIMIZER_CONSUMER_MAX_TESTS,
+                            test_files,
                         )
                     )
                     selected.update(fixture_map.get("tests/fixtures/optimizer/tpc-ds/tpc-ds.sql", []))
@@ -320,6 +356,7 @@ def select_tests(
                             line_map,
                             durations,
                             OPTIMIZER_CONSUMER_MAX_TESTS,
+                            test_files,
                         )
                     )
             if path.startswith(("sqlglot/typing/", "sqlglot/expressions/")):
@@ -339,14 +376,28 @@ def select_tests(
                             # A thin line witness set may miss other callers
                             # exercising branches in the same changed function.
                             hunk_tests_for_hunk.update(
-                                _ranked_symbol_tests(symbol_map, path, line, line_map, durations)
+                                _ranked_symbol_tests(
+                                    symbol_map,
+                                    path,
+                                    line,
+                                    line_map,
+                                    durations,
+                                    test_files,
+                                )
                             )
                 else:
                     # Pure additions have no baseline line coverage. Anchor to
                     # the nearest parent lines and the enclosing baseline symbol.
                     anchor = max(1, hunk["old_start"])
                     hunk_tests_for_hunk.update(
-                        _ranked_symbol_tests(symbol_map, path, anchor, line_map, durations)
+                        _ranked_symbol_tests(
+                            symbol_map,
+                            path,
+                            anchor,
+                            line_map,
+                            durations,
+                            test_files,
+                        )
                     )
                     for line in range(max(1, anchor - 2), anchor + 3):
                         hunk_tests_for_hunk.update(_line_tests(line_map, path, line))
@@ -424,6 +475,7 @@ def assign_workers(
 def main() -> None:
     tests = _read_json(DATA / "tests.json")["tests"]
     durations = {test["number"]: round(test["seconds"] * 1000) for test in tests}
+    test_files = {test["number"]: test["file"] for test in tests}
     try:
         impact = _read_impact_map(MAP_PATH)
     except (EOFError, OSError, json.JSONDecodeError, pickle.PickleError) as error:
@@ -435,7 +487,7 @@ def main() -> None:
     for patch in patches:
         files = parse_patch(patch.read_text(encoding="utf-8", errors="replace"))
         if impact.get("base_commit") == BASE_COMMIT and files:
-            selected = select_tests(files, tests, impact, durations)
+            selected = select_tests(files, tests, impact, durations, test_files)
         else:
             selected = {test["number"] for test in tests}
         workers = assign_workers(selected, tests, durations)
