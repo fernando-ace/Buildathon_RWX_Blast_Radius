@@ -320,6 +320,9 @@ def build(repo: Path, tests_path: Path, output_path: Path) -> None:
     fixture_tests = fixture_map(repo, tests)
     for path, numbers in fixture_reads.items():
         fixture_tests[path] = sorted(set(fixture_tests.get(path, [])) | numbers)
+    runtime_fixture_tests = {
+        path: sorted(numbers) for path, numbers in sorted(fixture_reads.items())
+    }
     result = {
         "version": 1,
         "base_commit": PINNED_COMMIT,
@@ -339,7 +342,8 @@ def build(repo: Path, tests_path: Path, output_path: Path) -> None:
             "sqlglotc": by_test_file.get("tests/test_sqlglotc.py", []),
         },
         "fixture_tests": fixture_tests,
-        "dialect_fixture_tests": dialect_fixture_map(repo, fixture_tests),
+        "runtime_fixture_tests": runtime_fixture_tests,
+        "dialect_fixture_tests": dialect_fixture_map(repo, runtime_fixture_tests),
         "api_consumer_tests": api_consumer_map(repo, tests),
     }
     output_path.parent.mkdir(parents=True, exist_ok=True)

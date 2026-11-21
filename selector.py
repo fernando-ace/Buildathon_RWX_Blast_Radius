@@ -98,6 +98,7 @@ def select_tests(files: list[dict], tests: list[dict], impact: dict) -> set[int]
     import_map = impact.get("import_tests", {})
     test_file_map = impact.get("test_file_tests", {})
     fixture_map = impact.get("fixture_tests", {})
+    runtime_fixture_map = impact.get("runtime_fixture_tests")
     dialect_fixture_map = impact.get("dialect_fixture_tests", {})
     suites = impact.get("suite_tests", {})
     api_consumers = impact.get("api_consumer_tests", {})
@@ -110,7 +111,12 @@ def select_tests(files: list[dict], tests: list[dict], impact: dict) -> set[int]
         for path in relevant_paths:
             if path.startswith("tests/fixtures/"):
                 fixture_key = Path(path).as_posix()
-                fixture_tests = _path_tests(fixture_map, fixture_key)
+                fixture_tests = _path_tests(
+                    runtime_fixture_map if runtime_fixture_map is not None else fixture_map,
+                    fixture_key,
+                )
+                if not fixture_tests:
+                    fixture_tests = _path_tests(fixture_map, fixture_key)
                 if fixture_tests:
                     selected.update(fixture_tests)
                 else:
@@ -138,10 +144,6 @@ def select_tests(files: list[dict], tests: list[dict], impact: dict) -> set[int]
             # File-level execution captures imports and module initialization.
             file_hits = _path_tests(file_map, path)
             if path.startswith("sqlglot/optimizer/"):
-                # Optimizer changes can alter output several calls away from
-                # the changed helper; keep the focused optimizer suite as a
-                # bounded recall backstop for those indirect dependencies.
-                selected.update(suites.get("optimizer", []))
                 selected.update(api_consumers.get("optimizer_pipeline", []))
                 if Path(path).name == "eliminate_joins.py":
                     selected.update(api_consumers.get("optimizer_joins", []))
@@ -169,10 +171,17 @@ def select_tests(files: list[dict], tests: list[dict], impact: dict) -> set[int]
                     for line in range(max(1, anchor - 2), anchor + 3):
                         hunk_tests.update(_line_tests(line_map, path, line))
             selected.update(hunk_tests)
+            if path.startswith("sqlglot/optimizer/") and not hunk_tests:
+                # Use the full optimizer suite only when the baseline has no
+                # line or symbol evidence for the changed code.
+                selected.update(suites.get("optimizer", []))
             if not hunk_tests:
                 selected.update(_path_tests(import_map, path))
             if path.startswith("sqlglot/parsers/"):
-                selected.update(dialect_fixture_map.get(Path(path).stem.lower(), []))
+                stem = Path(path).stem.lower()
+                selected.update(dialect_fixture_map.get(stem, []))
+                if len(selected) <= 20:
+                    selected.update(test_file_map.get(f"tests/dialects/test_{stem}.py", []))
             elif path.startswith("sqlglot/dialects/"):
                 stem = Path(path).stem.lower()
                 if len(hunk_tests) <= 10:
