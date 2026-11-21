@@ -8,6 +8,11 @@ import re
 import sys
 from pathlib import Path
 
+try:
+    import orjson
+except ImportError:
+    orjson = None
+
 
 DATA = Path(os.environ.get("BLAST_RADIUS_DATA", "/data"))
 MAP_PATH = Path(os.environ.get("BLAST_RADIUS_MAP", Path(__file__).with_name("impact_map.json")))
@@ -101,6 +106,11 @@ def _path_tests(path_map: dict, path: str) -> set[int]:
 
 def _normalize_patch_path(path: str) -> str:
     return path.replace("\\", "/").removeprefix("./")
+
+
+def _read_json(path: Path):
+    data = path.read_bytes()
+    return orjson.loads(data) if orjson is not None else json.loads(data)
 
 
 def select_tests(files: list[dict], tests: list[dict], impact: dict) -> set[int]:
@@ -229,9 +239,12 @@ def select_tests(files: list[dict], tests: list[dict], impact: dict) -> set[int]
     return selected
 
 
-def assign_workers(selected: set[int], tests: list[dict]) -> list[list[int]]:
+def assign_workers(
+    selected: set[int], tests: list[dict], durations: dict[int, int] | None = None
+) -> list[list[int]]:
     """Choose the cheapest greedy LPT schedule across one to eight workers."""
-    durations = {test["number"]: round(test["seconds"] * 1000) for test in tests}
+    if durations is None:
+        durations = {test["number"]: round(test["seconds"] * 1000) for test in tests}
     ordered = sorted(selected, key=lambda number: (-durations[number], number))
     best_workers: list[list[int]] = []
     best_cost: int | None = None
@@ -249,9 +262,10 @@ def assign_workers(selected: set[int], tests: list[dict]) -> list[list[int]]:
 
 
 def main() -> None:
-    tests = json.loads((DATA / "tests.json").read_text(encoding="utf-8"))["tests"]
+    tests = _read_json(DATA / "tests.json")["tests"]
+    durations = {test["number"]: round(test["seconds"] * 1000) for test in tests}
     try:
-        impact = json.loads(MAP_PATH.read_text(encoding="utf-8"))
+        impact = _read_json(MAP_PATH)
     except (OSError, json.JSONDecodeError) as error:
         print(f"could not read impact map: {error}; selecting every test", file=sys.stderr)
         impact = {}
@@ -264,8 +278,12 @@ def main() -> None:
             selected = select_tests(files, tests, impact)
         else:
             selected = {test["number"] for test in tests}
-        workers = assign_workers(selected, tests)
-        print(json.dumps({"commit": patch.stem, "workers": workers}, separators=(",", ":")))
+        workers = assign_workers(selected, tests, durations)
+        output = {"commit": patch.stem, "workers": workers}
+        if orjson is None:
+            print(json.dumps(output, separators=(",", ":")))
+        else:
+            sys.stdout.buffer.write(orjson.dumps(output) + b"\n")
     print(f"selected tests for {len(patches)} commits using baseline impact maps", file=sys.stderr)
 
 
