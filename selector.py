@@ -71,11 +71,15 @@ def _line_tests(line_map: dict, path: str, line: int) -> set[int]:
 
 
 def _tests_in_symbol(symbols: dict, path: str, line: int) -> set[int]:
-    result: set[int] = set()
-    for start, end, tests in symbols.get(path, []):
-        if start <= line <= end:
-            result.update(tests)
-    return result
+    matches = [
+        (end - start, tests)
+        for start, end, tests in symbols.get(path, [])
+        if start <= line <= end
+    ]
+    if not matches:
+        return set()
+    smallest = min(span for span, _ in matches)
+    return {number for span, tests in matches if span == smallest for number in tests}
 
 
 def _path_tests(path_map: dict, path: str) -> set[int]:
@@ -94,7 +98,9 @@ def select_tests(files: list[dict], tests: list[dict], impact: dict) -> set[int]
     import_map = impact.get("import_tests", {})
     test_file_map = impact.get("test_file_tests", {})
     fixture_map = impact.get("fixture_tests", {})
+    dialect_fixture_map = impact.get("dialect_fixture_tests", {})
     suites = impact.get("suite_tests", {})
+    api_consumers = impact.get("api_consumer_tests", {})
     all_tests = {test["number"] for test in tests}
 
     for changed in files:
@@ -107,15 +113,9 @@ def select_tests(files: list[dict], tests: list[dict], impact: dict) -> set[int]
                 fixture_tests = _path_tests(fixture_map, fixture_key)
                 if fixture_tests:
                     selected.update(fixture_tests)
-                # Fixture names usually identify one case, but fixtures can
-                # participate in shared validation helpers. Include their
-                # owning test suite as a recall guard.
-                parts = Path(path).parts
-                if len(parts) >= 3 and parts[2] == "optimizer":
-                    selected.update(suites.get("optimizer", []))
-                elif fixture_tests:
-                    selected.update(fixture_tests)
                 else:
+                    # No baseline consumer is known, so preserve recall with
+                    # a full fallback rather than guessing from the filename.
                     selected.update(all_tests)
                 continue
             if path.startswith("tests/") and path.endswith(".py"):
@@ -137,34 +137,48 @@ def select_tests(files: list[dict], tests: list[dict], impact: dict) -> set[int]
 
             # File-level execution captures imports and module initialization.
             file_hits = _path_tests(file_map, path)
-            selected.update(file_hits)
-            selected.update(_path_tests(import_map, path))
             if path.startswith("sqlglot/optimizer/"):
-                selected.update(suites.get("optimizer", []))
-                selected.update(suites.get("executor", []))
-            elif path.startswith(("sqlglot/parsers/", "sqlglot/dialects/", "sqlglot/expressions/", "sqlglot/transforms.py")):
-                selected.update(suites.get("optimizer", []))
-                if path.startswith("sqlglot/dialects/"):
-                    dialect = Path(path).stem
-                    selected.update(test_file_map.get(f"tests/dialects/test_{dialect}.py", []))
-                    selected.update(suites.get("dialect", []))
+                selected.update(api_consumers.get("optimizer_pipeline", []))
+                if Path(path).name == "eliminate_joins.py":
+                    selected.update(api_consumers.get("optimizer_joins", []))
+                    selected.update(api_consumers.get("executor_large_datasets", []))
+                    selected.update(fixture_map.get("tests/fixtures/optimizer/tpc-ds/tpc-ds.sql", []))
+                    selected.update(fixture_map.get("tests/fixtures/optimizer/tpc-h/tpc-h.sql", []))
+                elif "subquer" in Path(path).name.lower():
+                    selected.update(api_consumers.get("optimizer_subqueries", []))
             if path.startswith(("sqlglot/typing/", "sqlglot/expressions/")):
                 selected.update(suites.get("typing", []))
             if not file_hits and path.startswith("sqlglot/"):
                 selected.update(all_tests)
+            hunk_tests: set[int] = set()
             for hunk in changed.get("hunks", []):
                 old_lines = hunk.get("old_lines", [])
                 if old_lines:
                     for line in old_lines:
-                        selected.update(_line_tests(line_map, path, line))
-                        selected.update(_tests_in_symbol(symbol_map, path, line))
+                        hunk_tests.update(_line_tests(line_map, path, line))
+                        hunk_tests.update(_tests_in_symbol(symbol_map, path, line))
                 else:
                     # Pure additions have no baseline line coverage. Anchor to
                     # the nearest parent lines and the enclosing baseline symbol.
                     anchor = max(1, hunk["old_start"])
-                    selected.update(_tests_in_symbol(symbol_map, path, anchor))
+                    hunk_tests.update(_tests_in_symbol(symbol_map, path, anchor))
                     for line in range(max(1, anchor - 2), anchor + 3):
-                        selected.update(_line_tests(line_map, path, line))
+                        hunk_tests.update(_line_tests(line_map, path, line))
+            selected.update(hunk_tests)
+            if not hunk_tests:
+                selected.update(_path_tests(import_map, path))
+            if path.startswith("sqlglot/parsers/"):
+                selected.update(dialect_fixture_map.get(Path(path).stem.lower(), []))
+            elif path.startswith("sqlglot/dialects/") and len(hunk_tests) <= 10:
+                selected.update(dialect_fixture_map.get(Path(path).stem.lower(), []))
+            # Broad file coverage is useful for import-time changes, but a
+            # module imported by most of the suite should not drown out a
+            # precise function-level witness. Keep it when the candidate set
+            # is bounded or when it is close in size to the hunk witnesses.
+            if len(file_hits) <= 200 and (
+                not hunk_tests or len(file_hits) <= max(8, 2 * len(hunk_tests))
+            ):
+                selected.update(file_hits)
 
     return selected
 

@@ -32,10 +32,15 @@ class PerTestContext:
     @pytest.hookimpl(hookwrapper=True, tryfirst=True)
     def pytest_runtest_protocol(self, item):
         self.coverage.switch_context(item.nodeid)
-        yield
+        self.active_nodeid = item.nodeid
+        try:
+            yield
+        finally:
+            self.active_nodeid = None
 
     def __init__(self, coverage_session: coverage.Coverage):
         self.coverage = coverage_session
+        self.active_nodeid: str | None = None
 
 
 def normalized_path(path: Path, root: Path) -> str | None:
@@ -81,6 +86,63 @@ def fixture_map(repo: Path, tests: list[dict]) -> dict[str, list[int]]:
         if matches:
             result[key] = matches
     return result
+
+
+def dialect_fixture_map(repo: Path, fixtures: dict[str, list[int]]) -> dict[str, list[int]]:
+    """Map dialect names to tests that consume matching SQL fixtures."""
+    result: dict[str, set[int]] = defaultdict(set)
+    dialect_line = re.compile(r"^\s*#\s*dialect:\s*([A-Za-z0-9_]+)", re.IGNORECASE | re.MULTILINE)
+    for relative, numbers in fixtures.items():
+        path = repo / relative
+        if path.suffix.lower() not in {".sql", ".txt"}:
+            continue
+        try:
+            content = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for dialect in dialect_line.findall(content):
+            result[dialect.lower()].update(numbers)
+    return {dialect: sorted(numbers) for dialect, numbers in sorted(result.items())}
+
+
+def api_consumer_map(repo: Path, tests: list[dict]) -> dict[str, list[int]]:
+    """Index test functions that call core optimizer APIs by name."""
+    by_file: dict[str, list[dict]] = defaultdict(list)
+    for test in tests:
+        by_file[test["file"]].append(test)
+    groups: dict[str, set[int]] = defaultdict(set)
+    for test_file, file_tests in by_file.items():
+        if test_file not in {"tests/test_optimizer.py", "tests/test_executor.py"}:
+            continue
+        try:
+            tree = ast.parse((repo / test_file).read_text(encoding="utf-8"))
+        except (OSError, SyntaxError, UnicodeError):
+            continue
+        by_name: dict[str, set[int]] = defaultdict(set)
+        for test in file_tests:
+            name = test["id"].split("::")[-1].split("[", 1)[0]
+            by_name[name].add(test["number"])
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or not node.name.startswith("test_"):
+                continue
+            numbers = by_name.get(node.name, set())
+            if not numbers:
+                continue
+            references = {
+                ast.unparse(child)
+                for child in ast.walk(node)
+                if isinstance(child, (ast.Name, ast.Attribute))
+            }
+            if test_file == "tests/test_optimizer.py":
+                if "optimizer.optimize" in references:
+                    groups["optimizer_pipeline"].update(numbers)
+                if any("eliminate_joins" in reference for reference in references):
+                    groups["optimizer_joins"].update(numbers)
+                if any("subquer" in node.name.lower() or "subquer" in ref.lower() for ref in references):
+                    groups["optimizer_subqueries"].update(numbers)
+            elif node.name in {"test_execute_tpcds", "test_execute_tpch"}:
+                groups["executor_large_datasets"].update(numbers)
+    return {name: sorted(numbers) for name, numbers in sorted(groups.items())}
 
 
 def import_map(repo: Path, tests: list[dict]) -> dict[str, list[int]]:
@@ -188,6 +250,9 @@ def build(repo: Path, tests_path: Path, output_path: Path) -> None:
     number_by_node = {test["id"]: test["number"] for test in tests}
     file_tests: dict[str, set[int]] = defaultdict(set)
     line_hits: dict[str, dict[int, set[int]]] = defaultdict(lambda: defaultdict(set))
+    fixture_reads: dict[str, set[int]] = defaultdict(set)
+    fixture_root = os.path.normcase(os.path.abspath(repo / "tests" / "fixtures"))
+    fixture_prefix = fixture_root + os.sep
 
     with tempfile.TemporaryDirectory(prefix="blast-radius-coverage-") as temporary:
         data_path = Path(temporary) / ".coverage"
@@ -198,6 +263,23 @@ def build(repo: Path, tests_path: Path, output_path: Path) -> None:
             branch=False,
         )
         plugin = PerTestContext(coverage_session)
+        def audit_file_open(event: str, args: tuple) -> None:
+            if event != "open" or plugin.active_nodeid is None or not args:
+                return
+            raw = args[0]
+            if not isinstance(raw, (str, bytes, os.PathLike)):
+                return
+            value = os.fsdecode(raw)
+            if "fixtures" not in value.replace("\\", "/"):
+                return
+            candidate = os.path.normcase(os.path.abspath(value))
+            if candidate.startswith(fixture_prefix):
+                number = number_by_node.get(plugin.active_nodeid)
+                if number is not None:
+                    relative = Path(candidate).relative_to(repo.resolve()).as_posix()
+                    fixture_reads[relative].add(number)
+
+        sys.addaudithook(audit_file_open)
         coverage_session.start()
         old_skip = os.environ.get("SKIP_INTEGRATION")
         old_cwd = Path.cwd()
@@ -235,6 +317,9 @@ def build(repo: Path, tests_path: Path, output_path: Path) -> None:
     by_test_file: dict[str, list[int]] = defaultdict(list)
     for test in tests:
         by_test_file[test["file"]].append(test["number"])
+    fixture_tests = fixture_map(repo, tests)
+    for path, numbers in fixture_reads.items():
+        fixture_tests[path] = sorted(set(fixture_tests.get(path, [])) | numbers)
     result = {
         "version": 1,
         "base_commit": PINNED_COMMIT,
@@ -253,7 +338,9 @@ def build(repo: Path, tests_path: Path, output_path: Path) -> None:
             "typing": by_test_file.get("tests/test_typing.py", []),
             "sqlglotc": by_test_file.get("tests/test_sqlglotc.py", []),
         },
-        "fixture_tests": fixture_map(repo, tests),
+        "fixture_tests": fixture_tests,
+        "dialect_fixture_tests": dialect_fixture_map(repo, fixture_tests),
+        "api_consumer_tests": api_consumer_map(repo, tests),
     }
     output_path.parent.mkdir(parents=True, exist_ok=True)
     encoded = json.dumps(result, separators=(",", ":"))

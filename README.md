@@ -27,8 +27,8 @@ Lower is better. [SCORING.md](SCORING.md) has the exact rules; in short:
 
 ## How the selector works
 
-- `impact_map.json` records test-to-line, test-to-source-file, enclosing-symbol, and direct-import relationships from the pinned `sqlglot` commit. It also includes test-file membership and fixture associations.
-- At runtime, `selector.py` parses each unified diff and selects tests that cover changed lines or symbols. For higher-level behavior that baseline line coverage can miss, optimizer edits also include optimizer and executor suites, while parser and dialect edits include optimizer tests. Changed optimizer fixtures include the optimizer suite.
+- `impact_map.json` records per-test source coverage, direct imports, fixture reads, dialect-bearing fixtures, and direct test calls to optimizer APIs from the pinned `sqlglot` commit.
+- At runtime, `selector.py` parses each unified diff and selects tests that cover changed lines or the smallest enclosing function. It adds tests that use affected optimizer APIs, tests that read fixtures for a changed dialect, and bounded file-level coverage when the precise map is thin.
 - Unrecognized changes under `sqlglot/` or `tests/` fall back to all tests. This protects recall when a patch cannot be associated with the current map.
 - The selected tests are assigned with longest-processing-time-first scheduling. The selector tries one through eight workers and minimizes busiest-worker time plus the two-second cost per worker.
 
