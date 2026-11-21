@@ -216,7 +216,12 @@ def _read_impact_map(path: Path):
     return orjson.loads(data) if orjson is not None else json.loads(data)
 
 
-def select_tests(files: list[dict], tests: list[dict], impact: dict) -> set[int]:
+def select_tests(
+    files: list[dict],
+    tests: list[dict],
+    impact: dict,
+    durations: dict[int, int] | None = None,
+) -> set[int]:
     # A patch made entirely of ordinary comments in sqlglot source cannot
     # change runtime behavior, so it needs no test workers.
     if _is_comment_only_sqlglot_patch(files):
@@ -235,7 +240,8 @@ def select_tests(files: list[dict], tests: list[dict], impact: dict) -> set[int]
     suites = impact.get("suite_tests", {})
     api_consumers = impact.get("api_consumer_tests", {})
     all_tests = {test["number"] for test in tests}
-    durations = {test["number"]: round(test["seconds"] * 1000) for test in tests}
+    if durations is None:
+        durations = {test["number"]: round(test["seconds"] * 1000) for test in tests}
 
     for changed in files:
         old_path = _normalize_patch_path(changed.get("old_path", ""))
@@ -429,7 +435,7 @@ def main() -> None:
     for patch in patches:
         files = parse_patch(patch.read_text(encoding="utf-8", errors="replace"))
         if impact.get("base_commit") == BASE_COMMIT and files:
-            selected = select_tests(files, tests, impact)
+            selected = select_tests(files, tests, impact, durations)
         else:
             selected = {test["number"] for test in tests}
         workers = assign_workers(selected, tests, durations)
