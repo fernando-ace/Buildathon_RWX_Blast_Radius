@@ -20,6 +20,7 @@ BASE_COMMIT = "eb11aec4be8cb2122afe713a4816662c3f0fb2fa"
 HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 DIFF_PATH_RE = re.compile(r"^diff --git a/(.*?) b/(.*?)$")
 SYMBOL_FALLBACK_MAX_LINE_TESTS = 1
+SYMBOL_FALLBACK_MAX_TESTS = 16
 PYTHON_COMMENT_DIRECTIVE_RE = re.compile(
     r"^#\s*(?:type:|noqa|pragma:|coverage:|fmt:|isort:|pytest:|encoding[:=])", re.IGNORECASE
 )
@@ -86,16 +87,40 @@ def _line_tests(line_map: dict, path: str, line: int) -> set[int]:
     return result
 
 
-def _tests_in_symbol(symbols: dict, path: str, line: int) -> set[int]:
+def _ranked_symbol_tests(
+    symbols: dict,
+    path: str,
+    line: int,
+    line_map: dict,
+    durations: dict[int, int],
+) -> set[int]:
     matches = [
-        (end - start, tests)
+        (end - start, start, end, tests)
         for start, end, tests in symbols.get(path, [])
         if start <= line <= end
     ]
     if not matches:
         return set()
-    smallest = min(span for span, _ in matches)
-    return {number for span, tests in matches if span == smallest for number in tests}
+
+    smallest = min(span for span, _, _, _ in matches)
+    matches = [match for match in matches if match[0] == smallest]
+    start = min(match[1] for match in matches)
+    end = max(match[2] for match in matches)
+    candidates = {number for _, _, _, tests in matches for number in tests}
+    line_coverage = {number: 0 for number in candidates}
+    for line_start, line_end, tests in line_map.get(path, []):
+        overlap = max(0, min(end, line_end) - max(start, line_start) + 1)
+        if overlap:
+            for number in tests:
+                if number in line_coverage:
+                    line_coverage[number] += overlap
+
+    return set(
+        sorted(
+            candidates,
+            key=lambda number: (-line_coverage[number], durations[number], number),
+        )[:SYMBOL_FALLBACK_MAX_TESTS]
+    )
 
 
 def _inside_function(function_ranges: dict, path: str, line: int, added_indent: int = 0) -> bool:
@@ -175,6 +200,7 @@ def select_tests(files: list[dict], tests: list[dict], impact: dict) -> set[int]
     suites = impact.get("suite_tests", {})
     api_consumers = impact.get("api_consumer_tests", {})
     all_tests = {test["number"] for test in tests}
+    durations = {test["number"]: round(test["seconds"] * 1000) for test in tests}
 
     for changed in files:
         old_path = _normalize_patch_path(changed.get("old_path", ""))
@@ -239,12 +265,16 @@ def select_tests(files: list[dict], tests: list[dict], impact: dict) -> set[int]
                         if len(line_hits) < SYMBOL_FALLBACK_MAX_LINE_TESTS:
                             # A thin line witness set may miss other callers
                             # exercising branches in the same changed function.
-                            hunk_tests_for_hunk.update(_tests_in_symbol(symbol_map, path, line))
+                            hunk_tests_for_hunk.update(
+                                _ranked_symbol_tests(symbol_map, path, line, line_map, durations)
+                            )
                 else:
                     # Pure additions have no baseline line coverage. Anchor to
                     # the nearest parent lines and the enclosing baseline symbol.
                     anchor = max(1, hunk["old_start"])
-                    hunk_tests_for_hunk.update(_tests_in_symbol(symbol_map, path, anchor))
+                    hunk_tests_for_hunk.update(
+                        _ranked_symbol_tests(symbol_map, path, anchor, line_map, durations)
+                    )
                     for line in range(max(1, anchor - 2), anchor + 3):
                         hunk_tests_for_hunk.update(_line_tests(line_map, path, line))
                 if not hunk_tests_for_hunk:
