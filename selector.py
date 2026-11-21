@@ -21,8 +21,8 @@ BASE_COMMIT = "eb11aec4be8cb2122afe713a4816662c3f0fb2fa"
 HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 DIFF_PATH_RE = re.compile(r"^diff --git a/(.*?) b/(.*?)$")
 SYMBOL_FALLBACK_MAX_LINE_TESTS = 1
-SYMBOL_FALLBACK_MAX_TESTS = 16
-OPTIMIZER_CONSUMER_MAX_TESTS = 32
+SYMBOL_FALLBACK_MAX_TESTS = 32
+OPTIMIZER_CONSUMER_MAX_TESTS = 40
 PYTHON_COMMENT_DIRECTIVE_RE = re.compile(
     r"^#\s*(?:type:|noqa|pragma:|coverage:|fmt:|isort:|pytest:|encoding[:=])", re.IGNORECASE
 )
