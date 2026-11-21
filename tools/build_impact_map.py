@@ -245,6 +245,25 @@ def symbol_map(repo: Path, line_tests: dict[str, list[list]]) -> dict[str, list[
     return output
 
 
+def function_ranges(repo: Path) -> dict[str, list[list[int]]]:
+    """Map function bodies so import-time fallback stays off ordinary function edits."""
+    output: dict[str, list[list[int]]] = {}
+    for source in (repo / "sqlglot").rglob("*.py"):
+        relative = source.relative_to(repo).as_posix()
+        try:
+            tree = ast.parse(source.read_text(encoding="utf-8"))
+        except (OSError, SyntaxError, UnicodeError):
+            continue
+        ranges = [
+            [node.body[0].lineno, node.end_lineno]
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.body
+        ]
+        if ranges:
+            output[relative] = sorted(ranges)
+    return output
+
+
 def build(repo: Path, tests_path: Path, output_path: Path) -> None:
     tests = json.loads(tests_path.read_text(encoding="utf-8"))["tests"]
     number_by_node = {test["id"]: test["number"] for test in tests}
@@ -333,6 +352,7 @@ def build(repo: Path, tests_path: Path, output_path: Path) -> None:
         "file_tests": file_lists,
         "import_tests": import_map(repo, tests),
         "symbol_tests": symbol_map(repo, compact_lines),
+        "function_ranges": function_ranges(repo),
         "test_file_tests": dict(sorted(by_test_file.items())),
         "suite_tests": {
             "optimizer": by_test_file.get("tests/test_optimizer.py", []),

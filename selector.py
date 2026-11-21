@@ -57,6 +57,11 @@ def parse_patch(text: str) -> list[dict]:
             old_line += 1
         elif line.startswith("+") and not line.startswith("+++"):
             current["hunks"][-1]["added"] = True
+            indent = len(line[1:]) - len(line[1:].lstrip(" \t"))
+            current["hunks"][-1]["added_indent"] = max(
+                current["hunks"][-1].get("added_indent", 0), indent
+            )
+            current["hunks"][-1].setdefault("added_points", []).append((old_line, indent))
             new_line += 1
     return files
 
@@ -82,6 +87,14 @@ def _tests_in_symbol(symbols: dict, path: str, line: int) -> set[int]:
     return {number for span, tests in matches if span == smallest for number in tests}
 
 
+def _inside_function(function_ranges: dict, path: str, line: int, added_indent: int = 0) -> bool:
+    ranges = function_ranges.get(path, [])
+    return any(
+        start <= line <= end or (added_indent > 0 and start == line + 1)
+        for start, end in ranges
+    )
+
+
 def _path_tests(path_map: dict, path: str) -> set[int]:
     return set(path_map.get(path, []))
 
@@ -94,6 +107,7 @@ def select_tests(files: list[dict], tests: list[dict], impact: dict) -> set[int]
     selected: set[int] = set()
     line_map = impact.get("line_tests", {})
     symbol_map = impact.get("symbol_tests", {})
+    function_map = impact.get("function_ranges", {})
     file_map = impact.get("file_tests", {})
     import_map = impact.get("import_tests", {})
     test_file_map = impact.get("test_file_tests", {})
@@ -176,7 +190,21 @@ def select_tests(files: list[dict], tests: list[dict], impact: dict) -> set[int]
                 # line or symbol evidence for the changed code.
                 selected.update(suites.get("optimizer", []))
             if not hunk_tests:
-                selected.update(_path_tests(import_map, path))
+                changed_lines = []
+                for hunk in changed.get("hunks", []):
+                    old_lines = hunk.get("old_lines", [])
+                    if old_lines:
+                        changed_lines.extend((line, 0) for line in old_lines)
+                    else:
+                        changed_lines.extend(
+                            (max(1, line), indent)
+                            for line, indent in hunk.get("added_points", [])
+                        )
+                if not changed_lines or not all(
+                    _inside_function(function_map, path, line, indent)
+                    for line, indent in changed_lines
+                ):
+                    selected.update(_path_tests(import_map, path))
             if path.startswith("sqlglot/parsers/"):
                 stem = Path(path).stem.lower()
                 selected.update(dialect_fixture_map.get(stem, []))
