@@ -402,7 +402,7 @@ def select_tests(
                     has_uncovered_hunk = True
                 hunk_tests.update(hunk_tests_for_hunk)
             selected.update(hunk_tests)
-            if path.startswith("sqlglot/optimizer/"):
+            if path.startswith("sqlglot/optimizer/") and len(hunk_tests) <= 10:
                 selected.update(
                     _ranked_path_tests(
                         api_consumers.get("optimizer_pipeline", []),
