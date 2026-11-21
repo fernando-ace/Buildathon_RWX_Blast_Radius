@@ -23,6 +23,8 @@ DIFF_PATH_RE = re.compile(r"^diff --git a/(.*?) b/(.*?)$")
 SYMBOL_FALLBACK_MAX_LINE_TESTS = 1
 SYMBOL_FALLBACK_MAX_TESTS = 40
 OPTIMIZER_CONSUMER_MAX_TESTS = 40
+OPTIMIZER_PIPELINE_MAX_TESTS = 16
+OPTIMIZER_SUBQUERY_MAX_TESTS = 16
 DIRECT_LINE_RANK_THRESHOLD = 24
 PYTHON_COMMENT_DIRECTIVE_RE = re.compile(
     r"^#\s*(?:!|type:|mypy:|pyright:|pyre:|noqa|pragma:|coverage:|fmt:|isort:|"
@@ -104,7 +106,12 @@ def _ranked_candidates(
 
     ordered = sorted(
         candidates,
-        key=lambda number: (-line_coverage[number], durations[number], number),
+        key=lambda number: (
+            -line_coverage[number] / max(1, durations[number]),
+            -line_coverage[number],
+            durations[number],
+            number,
+        ),
     )
     selected: list[int] = []
     seen_files: set[str] = set()
@@ -194,6 +201,33 @@ def _ranked_path_tests(
                 line_coverage[number] += overlap
 
     return _ranked_candidates(candidates, line_coverage, durations, test_files, limit)
+
+
+def _ranked_optimizer_pipeline_tests(
+    candidates: list[int],
+    tests: list[dict],
+    path: str,
+    line_map: dict,
+    durations: dict[int, int],
+    test_files: dict[int, str],
+) -> set[int]:
+    """Keep the public optimize smoke test alongside path-relevant consumers."""
+    candidate_set = set(candidates)
+    core_smoke = {
+        test["number"]
+        for test in tests
+        if test["number"] in candidate_set
+        and test["id"].split("[", 1)[0].endswith("::test_optimize")
+    }
+    ranked = _ranked_path_tests(
+        [number for number in candidates if number not in core_smoke],
+        path,
+        line_map,
+        durations,
+        max(0, OPTIMIZER_PIPELINE_MAX_TESTS - len(core_smoke)),
+        test_files,
+    )
+    return core_smoke | ranked
 
 
 def _normalize_patch_path(path: str) -> str:
@@ -370,7 +404,7 @@ def select_tests(
                             path,
                             line_map,
                             durations,
-                            OPTIMIZER_CONSUMER_MAX_TESTS,
+                            OPTIMIZER_SUBQUERY_MAX_TESTS,
                             test_files,
                         )
                     )
@@ -444,12 +478,12 @@ def select_tests(
             selected.update(hunk_tests)
             if path.startswith("sqlglot/optimizer/"):
                 selected.update(
-                    _ranked_path_tests(
+                    _ranked_optimizer_pipeline_tests(
                         api_consumers.get("optimizer_pipeline", []),
+                        tests,
                         path,
                         line_map,
                         durations,
-                        OPTIMIZER_CONSUMER_MAX_TESTS,
                         test_files,
                     )
                 )
