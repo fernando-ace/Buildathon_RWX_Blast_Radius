@@ -24,9 +24,6 @@ SYMBOL_FALLBACK_MAX_LINE_TESTS = 1
 SYMBOL_FALLBACK_MAX_TESTS = 48
 OPTIMIZER_CONSUMER_MAX_TESTS = 40
 DIRECT_LINE_RANK_THRESHOLD = 24
-PYTHON_COMMENT_DIRECTIVE_RE = re.compile(
-    r"^#\s*(?:type:|noqa|pragma:|coverage:|fmt:|isort:|pytest:|encoding[:=])", re.IGNORECASE
-)
 
 
 def parse_patch(text: str) -> list[dict]:
@@ -198,43 +195,6 @@ def _normalize_patch_path(path: str) -> str:
     return path.replace("\\", "/").removeprefix("./")
 
 
-def _has_executable_change(hunks: list[dict]) -> bool:
-    """Treat ordinary Python comments as non-runtime changes, conservatively."""
-    changed_lines = [
-        line
-        for hunk in hunks
-        for line in hunk.get("old_text", []) + hunk.get("new_text", [])
-    ]
-    if not changed_lines:
-        return True
-
-    for line in changed_lines:
-        stripped = line.strip()
-        if not stripped:
-            continue
-        if stripped.startswith("#") and not PYTHON_COMMENT_DIRECTIVE_RE.match(stripped):
-            continue
-        return True
-    return False
-
-
-def _is_comment_only_sqlglot_patch(files: list[dict]) -> bool:
-    if not files:
-        return False
-    for file in files:
-        paths = {
-            _normalize_patch_path(file.get("old_path", "")),
-            _normalize_patch_path(file.get("new_path", "")),
-        } - {"", "/dev/null"}
-        if not paths or not all(
-            path.startswith("sqlglot/") and path.endswith(".py") for path in paths
-        ):
-            return False
-        if _has_executable_change(file.get("hunks", [])):
-            return False
-    return True
-
-
 def _read_json(path: Path):
     data = path.read_bytes()
     return orjson.loads(data) if orjson is not None else json.loads(data)
@@ -254,11 +214,6 @@ def select_tests(
     durations: dict[int, int] | None = None,
     test_files: dict[int, str] | None = None,
 ) -> set[int]:
-    # A patch made entirely of ordinary comments in sqlglot source cannot
-    # change runtime behavior, so it needs no test workers.
-    if _is_comment_only_sqlglot_patch(files):
-        return set()
-
     selected: set[int] = set()
     line_map = impact.get("line_tests", {})
     symbol_map = impact.get("symbol_tests", {})
